@@ -1,0 +1,55 @@
+name: 每日更新台股資料
+
+on:
+  schedule:
+    - cron: "10 7 * * 1-5"   # 台灣時間週一到週五 15:10（GitHub 排程可能延遲幾分鐘到幾十分鐘）
+  workflow_dispatch:          # 可在 Actions 頁面手動按 Run workflow
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 讀取已存的歷史資料
+        run: |
+          if git fetch -q origin data:data 2>/dev/null; then git show data:history.json > history.json; echo "已讀取歷史資料"; else echo "第一次執行，沒有歷史資料"; fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 下載證交所與櫃買中心資料
+        env:
+          TZ: Asia/Taipei
+        run: python twstock_update.py --nopause
+
+      - name: 保存歷史資料（data 分支，只保留一個版本）
+        run: |
+          mkdir -p /tmp/d && cp history.json /tmp/d/ && cd /tmp/d
+          git init -q -b data && git add history.json
+          git -c user.name="stock-bot" -c user.email="stock-bot@users.noreply.github.com" commit -qm "data $(TZ=Asia/Taipei date +%F)"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" data
+
+      - name: 準備網站檔案
+        run: mkdir -p _site && cp index.html data.js _site/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
